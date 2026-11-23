@@ -1,0 +1,47 @@
+@import 'tailwindcss';
+/* Konsta UI: mobile iOS / Material components for Tailwind */
+@import 'konsta/react/theme.css';
+
+/* SZABIST blue. Konsta builds its whole colour palette from this one value. */
+@theme {
+  --color-brand-primary: #0c4da1;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* stop the "pull to refresh" bounce from fighting the app */
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Material theme: use the exact SZABIST blue for buttons, tabs and highlights
+   (Konsta would otherwise derive a greyer shade from the brand colour). */
+:root:root {
+  --k-color-md-light-primary: #0c4da1;
+  --k-color-md-light-on-primary: #ffffff;
+  --k-color-md-light-primary-container: #d6e3ff;
+  --k-color-md-light-on-primary-container: #001b3e;
+  --k-color-md-light-secondary-container: #dce6f7;
+  --k-color-md-light-on-secondary-container: #0a2a57;
+}
+
+/* Profile card (Directory): backdrop fades in, the card slides up like a phone bottom sheet */
+@keyframes szabu-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes szabu-slide-up {
+  from { transform: translateY(32px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.szabu-fade { animation: szabu-fade-in 160ms ease-out; }
+.szabu-sheet { animation: szabu-slide-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .szabu-fade, .szabu-sheet { animation: none; }
+}

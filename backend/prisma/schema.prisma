@@ -1,0 +1,432 @@
+// Szab U database schema.
+// Source of truth: "Entity Relationship Diagram: Szab U" (SzabU_ERD_L.docx).
+// Connection URL lives in prisma7.config.ts (Prisma 7 does not allow `url` here).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------- Enums (the ERD shows these columns as strings with fixed values) ----------
+
+enum Role {
+  STUDENT
+  FACULTY
+  PM
+  HOD
+  DEAN
+  ADMIN
+}
+
+enum UserStatus {
+  PENDING // added by the admin, has not signed up yet
+  ACTIVE
+  AWAITING_ASSIGNMENT // signed up but not placed in the hierarchy: can log in, messaging blocked
+  SUSPENDED
+}
+
+enum ConversationType {
+  DIRECT
+  GROUP
+}
+
+enum AnnouncementPriority {
+  NORMAL
+  URGENT
+}
+
+enum AudienceLevel {
+  HODS
+  PMS
+  FACULTY
+  SECTION
+}
+
+enum AnnouncementStatus {
+  PUBLISHED
+  EDITED
+  WITHDRAWN
+}
+
+enum ClassUpdateCategory {
+  CANCELLATION
+  RESCHEDULE
+  ASSIGNMENT
+  GENERAL
+}
+
+enum NotificationType {
+  MESSAGE
+  ANNOUNCEMENT
+  CLASS_UPDATE
+  ANON_MESSAGE
+}
+
+enum PushStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum AuthPurpose {
+  SIGNUP
+  RESET
+}
+
+enum ThreadStatus {
+  OPEN
+  CLOSED
+}
+
+enum MessageDirection {
+  STUDENT_TO_PM
+  PM_TO_STUDENT
+}
+
+// ---------- Academic Hierarchy ----------
+
+model Department {
+  department_id String    @id @default(uuid())
+  name          String
+  dean_id       String?
+  dean          User?     @relation("DeanDepartments", fields: [dean_id], references: [user_id])
+  programs      Program[]
+
+  @@map("departments")
+}
+
+model Program {
+  program_id    String     @id @default(uuid())
+  department_id String
+  name          String
+  hod_id        String?
+  department    Department @relation(fields: [department_id], references: [department_id])
+  hod           User?      @relation("HodPrograms", fields: [hod_id], references: [user_id])
+  batches       Batch[]
+  members       User[]     @relation("ProgramMembers")
+
+  @@map("programs")
+}
+
+model Batch {
+  batch_id   String   @id @default(uuid())
+  program_id String
+  name       String
+  pm_id      String?
+  program    Program  @relation(fields: [program_id], references: [program_id])
+  pm         User?    @relation("PmBatches", fields: [pm_id], references: [user_id])
+  courses    Course[]
+  students   User[]   @relation("BatchStudents")
+
+  @@map("batches")
+}
+
+model Course {
+  course_id String    @id @default(uuid())
+  batch_id  String
+  code      String    @unique
+  title     String
+  batch     Batch     @relation(fields: [batch_id], references: [batch_id])
+  sections  Section[]
+
+  @@map("courses")
+}
+
+model User {
+  user_id         String     @id @default(uuid())
+  szabist_id      String     @unique
+  name            String
+  email           String     @unique
+  password_hash   String?
+  role            Role       @default(STUDENT)
+  status          UserStatus @default(PENDING)
+  program_id      String?
+  batch_id        String?
+  failed_attempts Int        @default(0)
+  locked_until    DateTime?
+  created_at      DateTime   @default(now())
+
+  program Program? @relation("ProgramMembers", fields: [program_id], references: [program_id])
+  batch   Batch?   @relation("BatchStudents", fields: [batch_id], references: [batch_id])
+
+  deanDepartments       Department[]            @relation("DeanDepartments")
+  hodPrograms           Program[]               @relation("HodPrograms")
+  pmBatches             Batch[]                 @relation("PmBatches")
+  teachingSections      Section[]               @relation("FacultySections")
+  enrollments           Enrollment[]
+  conversations         ConversationMember[]
+  messages              Message[]
+  messageStatuses       MessageStatus[]
+  announcements         Announcement[]          @relation("UserAnnouncements")
+  receivedAnnouncements AnnouncementRecipient[]
+  classUpdates          ClassUpdate[]           @relation("FacultyClassUpdates")
+  notifications         Notification[]
+  authCodes             AuthCode[]
+  sessions              Session[]
+  pmThreads             AnonymousThread[]       @relation("PmAnonymousThreads")
+  auditLogs             AuditLog[]              @relation("ActorAuditLogs")
+  pushSubscriptions     PushSubscription[]
+
+  @@map("users")
+}
+
+model Section {
+  section_id          String               @id @default(uuid())
+  course_id           String
+  faculty_id          String
+  section_name        String
+  term                String
+  course              Course               @relation(fields: [course_id], references: [course_id])
+  faculty             User                 @relation("FacultySections", fields: [faculty_id], references: [user_id])
+  enrollments         Enrollment[]
+  conversation        Conversation?
+  classUpdateSections ClassUpdateSection[]
+  announcements       Announcement[]
+
+  @@unique([course_id, faculty_id, section_name, term])
+  @@index([faculty_id])
+  @@map("sections")
+}
+
+model Enrollment {
+  enrollment_id String   @id @default(uuid())
+  section_id    String
+  student_id    String
+  enrolled_at   DateTime @default(now())
+  section       Section  @relation(fields: [section_id], references: [section_id])
+  student       User     @relation(fields: [student_id], references: [user_id])
+
+  @@unique([section_id, student_id])
+  @@index([student_id])
+  @@map("enrollments")
+}
+
+// ---------- Messaging & Course Group Chat ----------
+
+model Conversation {
+  conversation_id String               @id @default(uuid())
+  type            ConversationType     @default(DIRECT)
+  title           String?
+  direct_key      String?              @unique
+  section_id      String?              @unique
+  is_locked       Boolean              @default(false)
+  created_at      DateTime             @default(now())
+  section         Section?             @relation(fields: [section_id], references: [section_id])
+  members         ConversationMember[]
+  messages        Message[]
+
+  @@map("conversations")
+}
+
+model ConversationMember {
+  conversation_id String
+  user_id         String
+  is_muted        Boolean      @default(false)
+  last_read_at    DateTime?
+  conversation    Conversation @relation(fields: [conversation_id], references: [conversation_id])
+  user            User         @relation(fields: [user_id], references: [user_id])
+
+  @@id([conversation_id, user_id])
+  @@index([user_id])
+  @@map("conversation_members")
+}
+
+model Message {
+  message_id      String          @id @default(uuid())
+  conversation_id String
+  sender_id       String
+  body            String
+  client_msg_id   String
+  sent_at         DateTime        @default(now())
+  is_deleted      Boolean         @default(false)
+  conversation    Conversation    @relation(fields: [conversation_id], references: [conversation_id])
+  sender          User            @relation(fields: [sender_id], references: [user_id])
+  statuses        MessageStatus[]
+
+  @@unique([sender_id, client_msg_id])
+  @@index([conversation_id, sent_at])
+  @@map("messages")
+}
+
+model MessageStatus {
+  message_id   String
+  user_id      String
+  delivered_at DateTime?
+  read_at      DateTime?
+  message      Message   @relation(fields: [message_id], references: [message_id])
+  user         User      @relation(fields: [user_id], references: [user_id])
+
+  @@id([message_id, user_id])
+  @@index([user_id, read_at])
+  @@index([user_id, delivered_at])
+  @@map("message_statuses")
+}
+
+// ---------- Announcements & Class Updates ----------
+
+model Announcement {
+  announcement_id String                  @id @default(uuid())
+  sender_id       String
+  title           String
+  details         String
+  priority        AnnouncementPriority    @default(NORMAL)
+  audience_level  AudienceLevel           @default(SECTION)
+  status          AnnouncementStatus      @default(PUBLISHED)
+  published_at    DateTime                @default(now())
+  section_id      String?
+  sender          User                    @relation("UserAnnouncements", fields: [sender_id], references: [user_id])
+  section         Section?                @relation(fields: [section_id], references: [section_id])
+  recipients      AnnouncementRecipient[]
+
+  @@map("announcements")
+}
+
+model AnnouncementRecipient {
+  announcement_id String
+  user_id         String
+  read_at         DateTime?
+  announcement    Announcement @relation(fields: [announcement_id], references: [announcement_id])
+  user            User         @relation(fields: [user_id], references: [user_id])
+
+  @@id([announcement_id, user_id])
+  @@map("announcement_recipients")
+}
+
+model ClassUpdate {
+  update_id      String               @id @default(uuid())
+  faculty_id     String
+  category       ClassUpdateCategory  @default(GENERAL)
+  title          String
+  details        String
+  effective_date DateTime?            @db.Date
+  posted_at      DateTime             @default(now())
+  faculty        User                 @relation("FacultyClassUpdates", fields: [faculty_id], references: [user_id])
+  sections       ClassUpdateSection[]
+
+  @@map("class_updates")
+}
+
+model ClassUpdateSection {
+  update_id   String
+  section_id  String
+  classUpdate ClassUpdate @relation(fields: [update_id], references: [update_id])
+  section     Section     @relation(fields: [section_id], references: [section_id])
+
+  @@id([update_id, section_id])
+  @@map("class_update_sections")
+}
+
+// ---------- Notifications ----------
+
+model Notification {
+  notification_id String           @id @default(uuid())
+  user_id         String
+  type            NotificationType
+  ref_type        String
+  ref_id          String?
+  title           String
+  is_read         Boolean          @default(false)
+  push_status     PushStatus       @default(PENDING)
+  retry_count     Int              @default(0)
+  created_at      DateTime         @default(now())
+  user            User             @relation(fields: [user_id], references: [user_id])
+
+  @@index([user_id, is_read])
+  @@map("notifications")
+}
+
+// One row per device that agreed to receive phone notifications (Web Push).
+// NOT in the original ERD: the browser gives every device its own address and keys, and they must be stored.
+model PushSubscription {
+  subscription_id String   @id @default(uuid())
+  user_id         String
+  endpoint        String   @unique
+  p256dh          String
+  auth            String
+  user_agent      String?
+  created_at      DateTime @default(now())
+  user            User     @relation(fields: [user_id], references: [user_id])
+
+  @@index([user_id])
+  @@map("push_subscriptions")
+}
+
+// ---------- Anonymous Channel (Student to PM) ----------
+
+model AnonymousThread {
+  thread_id   String                @id @default(uuid())
+  pm_id       String
+  status      ThreadStatus          @default(OPEN)
+  created_at  DateTime              @default(now())
+  pm          User                  @relation("PmAnonymousThreads", fields: [pm_id], references: [user_id])
+  messages    AnonymousMessage[]
+  sender_link AnonymousSenderLink?
+
+  @@map("anonymous_threads")
+}
+
+model AnonymousMessage {
+  anon_message_id String           @id @default(uuid())
+  thread_id       String
+  direction       MessageDirection
+  body            String
+  sent_at         DateTime         @default(now())
+  read_at         DateTime?
+  thread          AnonymousThread  @relation(fields: [thread_id], references: [thread_id])
+
+  @@map("anonymous_messages")
+}
+
+model AnonymousSenderLink {
+  thread_id       String          @id
+  sender_enc      Bytes
+  sender_ref_hash String
+  thread          AnonymousThread @relation(fields: [thread_id], references: [thread_id])
+
+  @@map("anonymous_sender_links")
+}
+
+// ---------- Security & Audit ----------
+
+model AuthCode {
+  code_id    String      @id @default(uuid())
+  user_id    String
+  purpose    AuthPurpose
+  code_hash  String
+  attempts   Int         @default(0)
+  expires_at DateTime
+  used_at    DateTime?
+  user       User        @relation(fields: [user_id], references: [user_id])
+
+  @@index([user_id, purpose])
+  @@map("auth_codes")
+}
+
+model Session {
+  session_id     String    @id @default(uuid())
+  user_id        String
+  issued_at      DateTime  @default(now())
+  last_active_at DateTime  @default(now())
+  revoked_at     DateTime?
+  user           User      @relation(fields: [user_id], references: [user_id])
+
+  @@index([user_id])
+  @@map("sessions")
+}
+
+model AuditLog {
+  log_id      String   @id @default(uuid())
+  actor_id    String?
+  action      String
+  target_type String
+  target_id   String?
+  details     Json?
+  created_at  DateTime @default(now())
+  actor       User?    @relation("ActorAuditLogs", fields: [actor_id], references: [user_id])
+
+  @@index([created_at])
+  @@map("audit_logs")
+}
